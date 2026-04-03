@@ -1,11 +1,17 @@
-import { useState, useEffect, useCallback, DragEvent } from "react";
+import { useState, useEffect, DragEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
 interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+interface ProgressPayload {
+  status: string;
+  message: string;
 }
 
 function App() {
@@ -16,16 +22,35 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
+  const [mergeStatus, setMergeStatus] = useState("");
+  const [isMerging, setIsMerging] = useState(false);
 
   // Fetch all customers on mount
   useEffect(() => {
     fetchCustomers();
   }, []);
 
+  // Listen for PDF progress events from Rust
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    
+    const setupListener = async () => {
+      unlisten = await listen<ProgressPayload>("pdf-progress", (event) => {
+        setMergeStatus(event.payload.message);
+      });
+    };
+
+    setupListener();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   // Fetch files when a customer is selected
   useEffect(() => {
     if (selectedCustomerId) {
       fetchFiles(selectedCustomerId);
+      setMergeStatus("");
     } else {
       setFiles([]);
     }
@@ -84,16 +109,40 @@ function App() {
         await invoke("save_customer_file", {
           customerId: selectedCustomerId,
           fileName: file.name,
-          fileData: Array.from(uint8Array), // Tauri expects an array for Vec<u8>
+          fileData: Array.from(uint8Array),
         });
       }
       await fetchFiles(selectedCustomerId);
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Upload failed. See console for details.");
     } finally {
       setIsUploading(false);
       setUploadProgress("");
+    }
+  };
+
+  const handleMerge = async () => {
+    if (!selectedCustomerId || files.length === 0) return;
+    setIsMerging(true);
+    setMergeStatus("Initializing PDFium...");
+
+    try {
+      const response: ApiResponse<string> = await invoke("merge_documents", {
+        customerId: selectedCustomerId,
+        fileNames: files,
+      });
+
+      if (response.success) {
+        setMergeStatus("Successfully merged into final.pdf!");
+        // Refresh or notify user
+      } else {
+        setMergeStatus("Error: " + response.error);
+      }
+    } catch (err) {
+      console.error("Merge failed:", err);
+      setMergeStatus("Failed to merge documents.");
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -157,9 +206,15 @@ function App() {
           <>
             <header className="header">
               <h1>{selectedCustomerId}</h1>
-              <button disabled className="secondary">
-                Merge All PDFs
-              </button>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                {mergeStatus && <span style={{ fontSize: "0.9rem", color: "#888" }}>{mergeStatus}</span>}
+                <button 
+                  onClick={handleMerge} 
+                  disabled={isMerging || files.length === 0}
+                >
+                  {isMerging ? "Merging..." : "Merge All PDFs"}
+                </button>
+              </div>
             </header>
 
             <div

@@ -19,9 +19,15 @@ pub fn run() {
             let app_data = app.path().app_data_dir()
                 .expect("Failed to get app data directory");
             
+            // Resolve PDFium path: src-tauri/bin for dev, /bin in resource dir for prod
+            let pdfium_path = if cfg!(debug_assertions) {
+                std::env::current_dir()?.join("bin")
+            } else {
+                app.path().resource_dir()?.join("bin")
+            };
+
             let customers_path = app_data.join("customers");
-            
-            let manager = CustomerManager::new(customers_path);
+            let manager = CustomerManager::new(customers_path, pdfium_path);
             manager.init().expect("Failed to initialize customer storage");
             
             app.manage(manager);
@@ -33,6 +39,8 @@ pub fn run() {
             commands::save_customer_file,
             commands::get_customer_files,
             commands::get_customers,
+            commands::merge_documents,
+            commands::extract_pages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
