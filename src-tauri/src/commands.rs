@@ -1,17 +1,17 @@
 use tauri::{State, Window, Emitter};
-use crate::customer_manager::CustomerManager;
+use crate::customer_manager::{CustomerManager, CustomerMetadata, Customer};
 use serde::Serialize;
 use anyhow::Result;
 
 #[derive(Serialize)]
 pub struct CommandResponse<T> {
-    success: boolean,
-    data: Option<T>,
-    error: Option<String>,
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<String>,
 }
 
 impl<T> CommandResponse<T> {
-    fn ok(data: T) -> Self {
+    pub fn ok(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
@@ -19,7 +19,7 @@ impl<T> CommandResponse<T> {
         }
     }
 
-    fn err(e: String) -> Self {
+    pub fn err(e: String) -> Self {
         Self {
             success: false,
             data: None,
@@ -38,8 +38,30 @@ pub struct ProgressPayload {
 pub async fn create_customer_folder(
     manager: State<'_, CustomerManager>,
     customer_id: String,
+    name: String,
 ) -> Result<CommandResponse<()>, String> {
-    manager.create_customer(&customer_id)
+    manager.create_customer(&customer_id, &name)
+        .map(|_| CommandResponse::ok(()))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_customer(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+) -> Result<CommandResponse<()>, String> {
+    manager.delete_customer(&customer_id)
+        .map(|_| CommandResponse::ok(()))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_customer_name(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    name: String,
+) -> Result<CommandResponse<()>, String> {
+    manager.update_customer_name(&customer_id, &name)
         .map(|_| CommandResponse::ok(()))
         .map_err(|e| e.to_string())
 }
@@ -70,7 +92,16 @@ pub async fn get_customer_files(
 pub async fn get_customers(
     manager: State<'_, CustomerManager>,
 ) -> Result<CommandResponse<Vec<String>>, String> {
-    manager.list_customers()
+    manager.list_customers_with_names()
+        .map(|customers| CommandResponse::ok(customers.into_iter().map(|c| c.id).collect()))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_customers_with_names(
+    manager: State<'_, CustomerManager>,
+) -> Result<CommandResponse<Vec<Customer>>, String> {
+    manager.list_customers_with_names()
         .map(|customers| CommandResponse::ok(customers))
         .map_err(|e| e.to_string())
 }
@@ -133,7 +164,7 @@ pub async fn render_pdf_page(
 pub async fn get_customer_metadata(
     manager: State<'_, CustomerManager>,
     customer_id: String,
-) -> Result<CommandResponse<crate::customer_manager::CustomerMetadata>, String> {
+) -> Result<CommandResponse<CustomerMetadata>, String> {
     manager.get_customer_metadata(&customer_id)
         .map(|meta| CommandResponse::ok(meta))
         .map_err(|e| e.to_string())
