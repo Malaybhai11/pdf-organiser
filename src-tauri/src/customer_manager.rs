@@ -1,11 +1,10 @@
 use std::fs;
 pub use std::path::{Path, PathBuf};
-use std::sync::{Arc};
 use parking_lot::Mutex;
 use anyhow::{Result, Context};
 use sanitize_filename::sanitize;
 use pdfium_render::prelude::*;
-use image::{GenericImageView, DynamicImage};
+use image::GenericImageView;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,9 +16,10 @@ unsafe impl Send for PdfiumWrapper {}
 
 static PDFIUM: Lazy<Mutex<PdfiumWrapper>> = Lazy::new(|| {
     // Attempt to bind to a local platform-specific library first, then system
-    let pdfium = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./bin"))
+    let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./bin"))
         .or_else(|_| Pdfium::bind_to_system_library())
         .expect("Failed to bind to PDFium library. Ensure pdfium.dll/so is available.");
+    let pdfium = Pdfium::new(bindings);
     Mutex::new(PdfiumWrapper(pdfium))
 });
 
@@ -86,7 +86,7 @@ impl CustomerManager {
             if entry.path().is_dir() {
                 let id = entry.file_name().to_str().unwrap_or_default().to_string();
                 let meta = self.get_customer_metadata(&id).unwrap_or_default();
-                results.push(Customer { id, name: if meta.name.is_empty() { id.clone() } else { meta.name } });
+                results.push(Customer { id: id.clone(), name: if meta.name.is_empty() { id } else { meta.name } });
             }
         }
         Ok(results)
@@ -153,7 +153,11 @@ impl CustomerManager {
 
             if ext == "pdf" {
                 let src = pdfium.load_pdf_from_file(&path, None)?;
-                master_doc.pages().copy_page_range_from_document(&src, 0..(src.pages().len()), master_doc.pages().len())?;
+                let src_len = src.pages().len();
+                if src_len > 0 {
+                    let master_doc_len = master_doc.pages().len();
+                    master_doc.pages_mut().copy_page_range_from_document(&src, 0..=(src_len - 1), master_doc_len)?;
+                }
             } else if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
                 self.append_image_to_pdf_internal(pdfium, &mut master_doc, &path)?;
             }
@@ -178,7 +182,8 @@ impl CustomerManager {
 
         for &idx in &page_indices {
             if idx < src.pages().len() {
-                new_doc.pages().copy_page_range_from_document(&src, idx..=idx, new_doc.pages().len())?;
+                let new_doc_len = new_doc.pages().len();
+                new_doc.pages_mut().copy_page_range_from_document(&src, idx..=idx, new_doc_len)?;
             }
         }
 
@@ -243,23 +248,22 @@ impl CustomerManager {
         self.save_customer_metadata(customer_id, &meta)
     }
 
-    fn append_image_to_pdf_internal(&self, pdfium: &Pdfium, doc: &mut PdfDocument, image_path: &Path) -> Result<()> {
+    fn append_image_to_pdf_internal(&self, _pdfium: &Pdfium, doc: &mut PdfDocument, image_path: &Path) -> Result<()> {
         let img = image::open(image_path)?;
         let (w, h) = img.dimensions();
         let scale = 595.0 / w as f32;
         let p_w = PdfPoints::new(595.0);
         let p_h = PdfPoints::new(h as f32 * scale);
 
-        let mut page = doc.pages_mut().create_page_at_end(p_w, p_h)?;
-        let mut bitmap = PdfBitmap::new(w as i32, h as i32, PdfBitmapFormat::BGRA, None)?;
-
-        for (x, y, pixel) in img.pixels() {
-            bitmap.set_pixel_at_pos(x as i32, y as i32, pixel[2], pixel[1], pixel[0], pixel[3])?;
-        }
-
-        let mut obj = pdfium_render::prelude::PdfPageObject::new_image_object_from_bitmap(&bitmap)?;
-        obj.scale(p_w.value as f64, p_h.value as f64)?;
-        page.objects_mut().add_image_object(obj)?;
+        let size = PdfPagePaperSize::new_custom(p_w, p_h);
+        let mut page = doc.pages_mut().create_page_at_end(size)?;
+        
+        // Convert to DynamicImage just to be safe, then to PdfPageImageObject
+        let mut obj = PdfPageImageObject::new(doc, &img).map_err(|e| anyhow::anyhow!("PDFium error: {:?}", e))?;
+        obj.scale(p_w.value, p_h.value).map_err(|e| anyhow::anyhow!("PDFium error on scale: {:?}", e))?;
+        
+        let object = PdfPageObject::Image(obj);
+        page.objects_mut().add_object(object).map_err(|e| anyhow::anyhow!("PDFium error adding object: {:?}", e))?;
         Ok(())
     }
 
