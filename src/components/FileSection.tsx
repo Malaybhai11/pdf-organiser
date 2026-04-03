@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Copy, Download, Eye, FileText, MoreHorizontal, Trash2 } from 'lucide-react';
 
 interface FileSectionProps {
   files: string[];
@@ -21,13 +22,13 @@ const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview,
 
   useEffect(() => {
     const handleClickOutside = () => {
-      setContextMenu({ ...contextMenu, visible: false });
+      setContextMenu((current) => ({ ...current, visible: false }));
     };
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
-  }, [contextMenu]);
+  }, []);
 
-  const handleFileClick = (e: React.MouseEvent, file: string) => {
+  const openFileMenu = (e: React.MouseEvent, file: string) => {
     e.stopPropagation();
     e.preventDefault();
     setContextMenu({
@@ -47,7 +48,7 @@ const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview,
         onNotify('Failed to copy to clipboard', 'error');
       }
     }
-    setContextMenu({ ...contextMenu, visible: false });
+    setContextMenu((current) => ({ ...current, visible: false }));
   };
 
   const handleDownload = async () => {
@@ -66,7 +67,7 @@ const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview,
         onNotify('Failed to trigger download', 'error');
       }
     }
-    setContextMenu({ ...contextMenu, visible: false });
+    setContextMenu((current) => ({ ...current, visible: false }));
   };
 
   const handleDelete = async () => {
@@ -89,23 +90,61 @@ const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview,
         }
       }
     }
-    setContextMenu({ ...contextMenu, visible: false });
+    setContextMenu((current) => ({ ...current, visible: false }));
+  };
+
+  const getFileLabel = (file: string) => {
+    const extension = file.split('.').pop()?.toUpperCase();
+    return extension || 'FILE';
   };
 
   return (
-    <div className="file-grid" style={{ position: 'relative' }}>
+    <div className="file-grid">
       {files.length === 0 ? (
-        <p className="empty-msg" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No files uploaded.</p>
+        <div className="empty-state-card compact">
+          <div className="empty-state-icon">
+            <FileText size={28} />
+          </div>
+          <h3>No source files yet</h3>
+          <p>Drop PDFs or images into the upload area above to start building the final merged document.</p>
+        </div>
       ) : (
         files.map(file => (
           <div 
             key={file} 
             className="file-item" 
-            onDoubleClick={() => onPreview(file)}
-            onClick={(e) => handleFileClick(e, file)}
+            onClick={() => onPreview(file)}
+            onContextMenu={(e) => openFileMenu(e, file)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onPreview(file);
+              }
+            }}
           >
-            <div className="file-icon"></div>
-            <span className="file-name" title={file}>{file}</span>
+            <button
+              type="button"
+              className="card-menu-btn file-menu-btn"
+              onClick={(e) => openFileMenu(e, file)}
+              aria-label={`Open actions for ${file}`}
+            >
+              <MoreHorizontal size={16} />
+            </button>
+
+            <div className="file-icon">
+              <FileText size={28} />
+              <span className="file-badge">{getFileLabel(file)}</span>
+            </div>
+
+            <div className="file-card-copy">
+              <span className="file-name" title={file}>{file}</span>
+              <span className="file-hint">
+                <Eye size={14} />
+                Click to preview
+              </span>
+            </div>
           </div>
         ))
       )}
@@ -119,15 +158,18 @@ const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview,
             }}
             onClick={(e) => e.stopPropagation()}
         >
-            <div className="context-menu-item" onClick={handleCopy}>
+            <button type="button" className="context-menu-item" onClick={handleCopy}>
+                <Copy size={14} />
                 Copy Filename to Clipboard
-            </div>
-            <div className="context-menu-item" onClick={handleDownload}>
+            </button>
+            <button type="button" className="context-menu-item" onClick={handleDownload}>
+                <Download size={14} />
                 Download to /Downloads
-            </div>
-            <div className="context-menu-item delete-item" onClick={handleDelete}>
+            </button>
+            <button type="button" className="context-menu-item delete-item" onClick={handleDelete}>
+                <Trash2 size={14} />
                 Delete File
-            </div>
+            </button>
         </div>
       )}
     </div>

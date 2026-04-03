@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, Info } from 'lucide-react';
 
 interface NotificationProps {
   message: string;
@@ -14,14 +14,14 @@ export const Notification: React.FC<NotificationProps> = ({ message, type, onClo
   }, [onClose]);
 
   const icons = {
-    success: <CheckCircle className="text-green-500" size={20} />,
-    error: <AlertCircle className="text-red-500" size={20} />,
-    info: <Info className="text-blue-500" size={20} />
+    success: <CheckCircle2 size={20} />,
+    error: <AlertCircle size={20} />,
+    info: <Info size={20} />
   };
 
   return (
     <div className={`notification-toast ${type}`}>
-      <div className="notification-icon">
+      <div className={`notification-icon ${type}`}>
         {icons[type]}
       </div>
       <div className="notification-content">

@@ -18,14 +18,6 @@ impl<T> CommandResponse<T> {
             error: None,
         }
     }
-
-    pub fn err(e: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(e),
-        }
-    }
 }
 
 #[derive(Clone, Serialize)]
@@ -121,7 +113,8 @@ pub async fn merge_documents(
     };
 
     manager.merge_documents(&customer_id, file_names, progress_handler)
-        .map(|name| CommandResponse::ok(name))
+        .and_then(|name| manager.copy_to_downloads(&customer_id, &name))
+        .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }
 
@@ -212,5 +205,16 @@ pub async fn upload_file_from_path(
 ) -> Result<CommandResponse<String>, String> {
     manager.upload_from_path(&customer_id, &file_path)
         .map(|name| CommandResponse::ok(name))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn upload_files_from_paths(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_paths: Vec<String>,
+) -> Result<CommandResponse<Vec<String>>, String> {
+    manager.upload_from_paths(&customer_id, file_paths)
+        .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }

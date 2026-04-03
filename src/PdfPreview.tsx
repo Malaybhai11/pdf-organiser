@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Download, Scissors, X } from "lucide-react";
 import { PageThumbnail } from "./PageThumbnail";
 
 interface Props {
   customerId: string;
   fileName: string;
   onClose: () => void;
+  onNotify: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
 interface ApiResponse<T> {
@@ -14,7 +16,7 @@ interface ApiResponse<T> {
   error?: string;
 }
 
-export function PdfPreview({ customerId, fileName, onClose }: Props) {
+export function PdfPreview({ customerId, fileName, onClose, onNotify }: Props) {
   const [pageCount, setPageCount] = useState<number>(0);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -62,35 +64,62 @@ export function PdfPreview({ customerId, fileName, onClose }: Props) {
         pageIndices: indices,
       });
 
-      if (response.success) {
-        alert(`Successfully extracted to ${response.data}`);
+      if (response.success && response.data) {
+        const downloadResponse: ApiResponse<string> = await invoke("download_file", {
+          customerId,
+          fileName: response.data,
+        });
+
+        if (downloadResponse.success && downloadResponse.data) {
+          onNotify(`Extracted pages saved to ${downloadResponse.data}`, "success");
+        } else {
+          onNotify(`Extracted ${response.data}, but saving to Downloads failed.`, "info");
+        }
         onClose();
       } else {
-        alert("Extraction failed: " + response.error);
+        onNotify(`Extraction failed: ${response.error ?? "Unknown error"}`, "error");
       }
     } catch (err) {
       console.error("Extraction error:", err);
+      onNotify("Failed to extract selected pages", "error");
     } finally {
       setExtracting(false);
     }
   };
 
-  if (loading) return <div className="preview-overlay">Loading preview...</div>;
+  if (loading) {
+    return (
+      <div className="preview-overlay">
+        <div className="preview-loading">Loading preview...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="preview-overlay">
       <div className="preview-container">
         <header className="preview-header">
-          <h3>Preview: {fileName}</h3>
+          <div>
+            <span className="section-kicker">Page preview</span>
+            <h3>{fileName}</h3>
+            <p>{pageCount} page(s) available. Select the pages you want to extract as a new PDF.</p>
+          </div>
+
           <div className="preview-actions">
-            <span>{selectedPages.size} pages selected</span>
-            <button 
-              onClick={handleExtract} 
+            <span className="selection-counter">{selectedPages.size} pages selected</span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleExtract}
               disabled={extracting || selectedPages.size === 0}
             >
-              {extracting ? "Extracting..." : "Extract Selected Pages"}
+              <Scissors size={16} />
+              {extracting ? "Extracting..." : "Extract to Downloads"}
             </button>
-            <button className="secondary" onClick={onClose}>Close</button>
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              <X size={16} />
+              Close
+            </button>
           </div>
         </header>
 
@@ -106,6 +135,13 @@ export function PdfPreview({ customerId, fileName, onClose }: Props) {
             />
           ))}
         </div>
+
+        <footer className="preview-footer">
+          <div className="preview-footer-copy">
+            <Download size={16} />
+            Extracted pages are automatically copied to the Downloads folder.
+          </div>
+        </footer>
       </div>
     </div>
   );

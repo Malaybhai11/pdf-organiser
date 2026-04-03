@@ -7,7 +7,8 @@ use pdfium_render::prelude::*;
 use image::GenericImageView;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 // We use an unsafe wrapper because Pdfium is not Send, but we will ensure 
 // serial access via a global Mutex. This is more efficient than re-binding on each call.
@@ -77,11 +78,15 @@ pub struct Customer {
 
 pub struct CustomerManager {
     base_path: PathBuf,
+    recent_native_upload_batches: Mutex<HashMap<String, NativeUploadBatchState>>,
 }
 
 impl CustomerManager {
     pub fn new(base_path: PathBuf) -> Self {
-        Self { base_path }
+        Self {
+            base_path,
+            recent_native_upload_batches: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn init(&self) -> Result<()> {
@@ -142,20 +147,48 @@ impl CustomerManager {
     }
 
     pub fn upload_from_path(&self, customer_id: &str, file_path: &str) -> Result<String> {
-        let source = Path::new(file_path);
-        if !source.exists() {
-            return Err(anyhow::anyhow!("Source file does not exist: {}", file_path));
-        }
-        let file_name = source.file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?;
+        Ok(self.upload_from_paths(customer_id, vec![file_path.to_string()])?
+            .into_iter()
+            .next()
+            .unwrap_or_default())
+    }
 
+    pub fn upload_from_paths(&self, customer_id: &str, file_paths: Vec<String>) -> Result<Vec<String>> {
         let target_dir = self.base_path.join(customer_id).join("original_files");
-        if !target_dir.exists() { return Err(anyhow::anyhow!("Customer folder missing")); }
+        if !target_dir.exists() {
+            return Err(anyhow::anyhow!("Customer folder missing"));
+        }
 
-        let safe_name = self.generate_safe_filename(&target_dir, file_name);
-        fs::copy(source, target_dir.join(&safe_name))?;
-        Ok(safe_name)
+        let sources = self.prepare_native_upload_sources(file_paths)?;
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let batch_key = self.native_upload_batch_key(customer_id, &sources);
+        if !self.try_begin_native_upload_batch(&batch_key) {
+            return Ok(Vec::new());
+        }
+
+        let upload_result = (|| -> Result<Vec<String>> {
+            let mut uploaded_files = Vec::with_capacity(sources.len());
+            for source in &sources {
+                let safe_name = self.generate_safe_filename(&target_dir, &source.file_name);
+                fs::copy(&source.path, target_dir.join(&safe_name))?;
+                uploaded_files.push(safe_name);
+            }
+            Ok(uploaded_files)
+        })();
+
+        match upload_result {
+            Ok(uploaded_files) => {
+                self.finish_native_upload_batch(&batch_key);
+                Ok(uploaded_files)
+            }
+            Err(error) => {
+                self.clear_native_upload_batch(&batch_key);
+                Err(error)
+            }
+        }
     }
 
     pub fn delete_file(&self, customer_id: &str, file_name: &str) -> Result<()> {
@@ -370,5 +403,165 @@ impl CustomerManager {
             count += 1;
         }
         candidate
+    }
+
+    fn prepare_native_upload_sources(&self, file_paths: Vec<String>) -> Result<Vec<NativeUploadSource>> {
+        let mut seen = HashSet::new();
+        let mut sources = Vec::new();
+
+        for file_path in file_paths {
+            let source = Path::new(&file_path);
+            if !source.exists() {
+                return Err(anyhow::anyhow!("Source file does not exist: {}", file_path));
+            }
+
+            let canonical_path = fs::canonicalize(source)
+                .with_context(|| format!("Failed to resolve source file: {}", file_path))?;
+            let metadata = fs::metadata(&canonical_path)?;
+            if !metadata.is_file() {
+                return Err(anyhow::anyhow!("Source path is not a file: {}", file_path));
+            }
+
+            let modified = metadata.modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            let identity = format!(
+                "{}|{}|{}",
+                canonical_path.to_string_lossy(),
+                metadata.len(),
+                modified,
+            );
+
+            if !seen.insert(identity.clone()) {
+                continue;
+            }
+
+            let file_name = canonical_path.file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?
+                .to_string();
+
+            sources.push(NativeUploadSource {
+                identity,
+                path: canonical_path,
+                file_name,
+            });
+        }
+
+        Ok(sources)
+    }
+
+    fn native_upload_batch_key(&self, customer_id: &str, sources: &[NativeUploadSource]) -> String {
+        let mut identities: Vec<&str> = sources.iter().map(|source| source.identity.as_str()).collect();
+        identities.sort_unstable();
+        format!("{}::{}", customer_id, identities.join("::"))
+    }
+
+    fn try_begin_native_upload_batch(&self, batch_key: &str) -> bool {
+        const NATIVE_UPLOAD_DEDUPE_WINDOW: Duration = Duration::from_secs(2);
+
+        let now = Instant::now();
+        let mut recent_batches = self.recent_native_upload_batches.lock();
+        recent_batches.retain(|_, state| match state {
+            NativeUploadBatchState::InFlight => true,
+            NativeUploadBatchState::Completed { completed_at } => {
+                now.duration_since(*completed_at) <= NATIVE_UPLOAD_DEDUPE_WINDOW
+            }
+        });
+
+        if recent_batches.contains_key(batch_key) {
+            return false;
+        }
+
+        recent_batches.insert(
+            batch_key.to_string(),
+            NativeUploadBatchState::InFlight,
+        );
+        true
+    }
+
+    fn finish_native_upload_batch(&self, batch_key: &str) {
+        if let Some(state) = self.recent_native_upload_batches.lock().get_mut(batch_key) {
+            *state = NativeUploadBatchState::Completed {
+                completed_at: Instant::now(),
+            };
+        }
+    }
+
+    fn clear_native_upload_batch(&self, batch_key: &str) {
+        self.recent_native_upload_batches.lock().remove(batch_key);
+    }
+}
+
+struct NativeUploadSource {
+    identity: String,
+    path: PathBuf,
+    file_name: String,
+}
+
+enum NativeUploadBatchState {
+    InFlight,
+    Completed { completed_at: Instant },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CustomerManager;
+    use anyhow::Result;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn upload_from_paths_skips_duplicate_entries_in_same_batch() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let manager = CustomerManager::new(temp_dir.path().join("customers"));
+        manager.init()?;
+        manager.create_customer("cust-1", "Customer")?;
+
+        let source_path = temp_dir.path().join("document.pdf");
+        fs::write(&source_path, b"test")?;
+
+        let uploaded = manager.upload_from_paths(
+            "cust-1",
+            vec![
+                source_path.to_string_lossy().to_string(),
+                source_path.to_string_lossy().to_string(),
+            ],
+        )?;
+
+        assert_eq!(uploaded, vec!["document.pdf".to_string()]);
+
+        let stored_files = manager.list_original_files("cust-1")?;
+        assert_eq!(stored_files, vec!["document.pdf".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn upload_from_paths_ignores_immediate_duplicate_batches() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let manager = CustomerManager::new(temp_dir.path().join("customers"));
+        manager.init()?;
+        manager.create_customer("cust-1", "Customer")?;
+
+        let source_path = temp_dir.path().join("document.pdf");
+        fs::write(&source_path, b"test")?;
+
+        let first_upload = manager.upload_from_paths(
+            "cust-1",
+            vec![source_path.to_string_lossy().to_string()],
+        )?;
+        let duplicate_upload = manager.upload_from_paths(
+            "cust-1",
+            vec![source_path.to_string_lossy().to_string()],
+        )?;
+
+        assert_eq!(first_upload, vec!["document.pdf".to_string()]);
+        assert!(duplicate_upload.is_empty());
+
+        let stored_files = manager.list_original_files("cust-1")?;
+        assert_eq!(stored_files, vec!["document.pdf".to_string()]);
+        Ok(())
     }
 }

@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import FileSection from './FileSection';
 import { ProgressBar } from './ProgressBar';
 import { Notification } from './Notification';
-import { Upload } from 'lucide-react';
+import { Download, Files, Sparkles, Upload } from 'lucide-react';
 
 interface Customer {
   id: string | number;
@@ -22,13 +22,36 @@ interface ProgressPayload {
   message: string;
 }
 
+interface CommandResponse<T> {
+  success: boolean;
+  data: T | null;
+  error: string | null;
+}
+
+const NATIVE_DROP_DEDUPE_WINDOW_MS = 2000;
+
+const normalizeNativeDropPaths = (paths: string[]) =>
+  Array.from(
+    new Set(
+      paths
+        .map((path) => path.trim())
+        .filter(Boolean)
+    )
+  );
+
+const createNativeDropBatchKey = (customerId: string | number, paths: string[]) =>
+  `${customerId}::${[...normalizeNativeDropPaths(paths)].sort().join('::')}`;
+
 const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) => {
   const [files, setFiles] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ message: string; percentage: number } | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const [lastMergedPath, setLastMergedPath] = useState<string | null>(null);
   const selectedCustomerRef = useRef(selectedCustomer);
-  const lastDropTimeRef = useRef<number>(0);
+  const activeNativeDropBatchesRef = useRef<Set<string>>(new Set());
+  const recentNativeDropBatchesRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     selectedCustomerRef.current = selectedCustomer;
@@ -36,9 +59,11 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
 
   useEffect(() => {
     if (selectedCustomer) {
-      loadCustomerData();
+      setLastMergedPath(null);
+      void loadCustomerData();
     } else {
       setFiles([]);
+      setLastMergedPath(null);
     }
   }, [selectedCustomer]);
 
@@ -54,36 +79,62 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
         setIsDragOver(false);
       } else if (event.payload.type === 'drop') {
         setIsDragOver(false);
-        const now = Date.now();
-        if (now - lastDropTimeRef.current < 500) {
-            // Ignore rapid duplicate drop events
-            return;
-        }
-        lastDropTimeRef.current = now;
-
         const customer = selectedCustomerRef.current;
         if (!customer) return;
 
-        const paths: string[] = (event.payload as any).paths ?? [];
+        const paths = normalizeNativeDropPaths((event.payload as any).paths ?? []);
         if (paths.length === 0) return;
 
-        (async () => {
-          let successCount = 0;
-          for (const filePath of paths) {
-            try {
-              await invoke('upload_file_from_path', {
-                customerId: customer.id.toString(),
-                filePath,
-              });
-              successCount++;
-            } catch (err) {
-              console.error(`Upload failed for ${filePath}:`, err);
-              setNotification({ message: `Upload failed: ${filePath.split('/').pop()}`, type: 'error' });
-            }
+        const batchKey = createNativeDropBatchKey(customer.id, paths);
+        const now = Date.now();
+        const recentBatches = recentNativeDropBatchesRef.current;
+
+        for (const [key, seenAt] of recentBatches.entries()) {
+          if (now - seenAt > NATIVE_DROP_DEDUPE_WINDOW_MS) {
+            recentBatches.delete(key);
           }
-          if (successCount > 0) {
-            loadCustomerData();
-            setNotification({ message: `Uploaded ${successCount} file(s)`, type: 'success' });
+        }
+
+        if (activeNativeDropBatchesRef.current.has(batchKey)) {
+          return;
+        }
+
+        const lastSeenAt = recentBatches.get(batchKey);
+        if (lastSeenAt && now - lastSeenAt <= NATIVE_DROP_DEDUPE_WINDOW_MS) {
+          return;
+        }
+
+        activeNativeDropBatchesRef.current.add(batchKey);
+        recentBatches.set(batchKey, now);
+
+        (async () => {
+          let completedSuccessfully = false;
+
+          try {
+            const response = await invoke<CommandResponse<string[]>>('upload_files_from_paths', {
+              customerId: customer.id.toString(),
+              filePaths: paths,
+            });
+
+            if (!response.success) {
+              throw new Error(response.error ?? 'Upload failed');
+            }
+
+            const uploadedCount = response.data?.length ?? 0;
+            if (uploadedCount > 0) {
+              await loadCustomerData();
+              setNotification({ message: `Uploaded ${uploadedCount} file(s)`, type: 'success' });
+            }
+            completedSuccessfully = true;
+          } catch (err) {
+            console.error('Native file drop upload failed:', err);
+            recentNativeDropBatchesRef.current.delete(batchKey);
+            setNotification({ message: 'Upload failed for dropped file(s)', type: 'error' });
+          } finally {
+            activeNativeDropBatchesRef.current.delete(batchKey);
+            if (completedSuccessfully) {
+              recentNativeDropBatchesRef.current.set(batchKey, Date.now());
+            }
           }
         })();
       }
@@ -114,8 +165,10 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
   const loadCustomerData = async () => {
     if (!selectedCustomerRef.current) return;
     try {
-      const filesResp = await invoke<any>('get_customer_files', { customerId: selectedCustomerRef.current.id.toString() });
-      if (filesResp.success) setFiles(filesResp.data);
+      const filesResp = await invoke<CommandResponse<string[]>>('get_customer_files', { customerId: selectedCustomerRef.current.id.toString() });
+      if (filesResp.success && filesResp.data) {
+        setFiles(filesResp.data);
+      }
     } catch (err) {
       setNotification({ message: "Failed to load customer data", type: 'error' });
     }
@@ -131,12 +184,17 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
             const arrayBuffer = await file.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
             
-            await invoke('save_customer_file', {
+            const response = await invoke<CommandResponse<string>>('save_customer_file', {
                 customerId: selectedCustomer.id.toString(),
                 fileName: file.name,
                 fileData: Array.from(uint8Array)
             });
-            successCount++;
+
+            if (response.success) {
+              successCount++;
+            } else {
+              setNotification({ message: response.error ?? `Upload failed: ${file.name}`, type: 'error' });
+            }
         } catch (err) {
             console.error(`Upload failed for ${file.name}:`, err);
             setNotification({ message: `Upload failed: ${file.name}`, type: 'error' });
@@ -144,31 +202,37 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
     }
     
     if (successCount > 0) {
-        loadCustomerData();
+        await loadCustomerData();
         setNotification({ message: `Successfully uploaded ${successCount} file(s)`, type: 'success' });
     }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      processUploadedFiles(Array.from(e.target.files));
+      void processUploadedFiles(Array.from(e.target.files));
+      e.target.value = '';
     }
   };
 
 
   const handleMerge = async () => {
-    if (!selectedCustomer || files.length === 0) return;
-    setProgress({ message: "Initializing PDF engine...", percentage: 5 });
+    if (!selectedCustomer || files.length === 0 || isMerging) return;
+
+    setIsMerging(true);
+    setLastMergedPath(null);
+    setProgress({ message: "Preparing merged export...", percentage: 5 });
     try {
-      const resp = await invoke<any>('merge_documents', {
+      const resp = await invoke<CommandResponse<string>>('merge_documents', {
         customerId: selectedCustomer.id.toString(),
         fileNames: files
       });
-      if (resp.success) {
-        setProgress({ message: "Done!", percentage: 100 });
-        setTimeout(() => setProgress(null), 1000);
-        setNotification({ message: "All documents merged into final.pdf", type: 'success' });
-        loadCustomerData();
+
+      if (resp.success && resp.data) {
+        setLastMergedPath(resp.data);
+        setProgress({ message: "Saved to Downloads", percentage: 100 });
+        setTimeout(() => setProgress(null), 1200);
+        setNotification({ message: `Merged PDF saved to ${resp.data}`, type: 'success' });
+        await loadCustomerData();
       } else {
         setNotification({ message: resp.error || "Merge failed", type: 'error' });
         setProgress(null);
@@ -176,6 +240,8 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
     } catch (err) {
       setNotification({ message: "Merge process error", type: 'error' });
       setProgress(null);
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -195,40 +261,101 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
         <ProgressBar percentage={progress.percentage} message={progress.message} />
       )}
 
-      <div className="dashboard-header">
-          <h2>{selectedCustomer.name}</h2>
-          <span className="folder-id">ID: {selectedCustomer.id}</span>
+      <div className="dashboard-hero">
+        <div className="dashboard-header">
+          <div>
+            <span className="section-kicker">Customer workspace</span>
+            <h2>{selectedCustomer.name}</h2>
+            <p>Upload the source documents, review them, and export a fresh merged PDF directly into the Downloads folder.</p>
+          </div>
+
+          <div className="dashboard-badges">
+            <div className="info-pill">Customer ID {selectedCustomer.id}</div>
+            <div className="info-pill">{files.length} source file(s)</div>
+          </div>
+        </div>
+
+        <div className="dashboard-overview">
+          <div className={`dropzone ${isDragOver ? 'drag-over' : ''}`}>
+            <div className="dropzone-icon">
+              <Upload size={30} />
+            </div>
+            <div className="dropzone-copy">
+              <h3>Drop files here or choose files manually</h3>
+              <p>Supports PDFs plus JPG and PNG images. Native drag and drop is deduped to prevent accidental repeat uploads.</p>
+            </div>
+            <label className="btn btn-secondary dropzone-trigger" htmlFor="file-upload">
+              <Upload size={16} />
+              Choose Files
+            </label>
+            <input
+              type="file"
+              id="file-upload"
+              hidden
+              multiple
+              onChange={handleFileUpload}
+            />
+          </div>
+
+          <aside className="summary-card">
+            <div className="summary-card-header">
+              <span className="section-kicker">Export</span>
+              <h3>Finalize and save</h3>
+            </div>
+
+            <div className="summary-list">
+              <div className="summary-row">
+                <span><Files size={15} /> Uploaded files</span>
+                <strong>{files.length}</strong>
+              </div>
+              <div className="summary-row">
+                <span><Download size={15} /> Save location</span>
+                <strong>Downloads</strong>
+              </div>
+              <div className="summary-row">
+                <span><Sparkles size={15} /> Export name</span>
+                <strong>final.pdf</strong>
+              </div>
+            </div>
+
+            <button className="btn btn-primary btn-wide" onClick={handleMerge} disabled={isMerging || files.length === 0}>
+              <Download size={16} />
+              {isMerging ? 'Merging and Saving...' : 'Finalize & Save to Downloads'}
+            </button>
+
+            <p className="summary-footnote">
+              The app still builds the merged file inside its workspace, then immediately copies the finished export into the user's Downloads folder.
+            </p>
+          </aside>
+        </div>
+
+        {lastMergedPath && (
+          <div className="export-banner">
+            <div className="export-banner-label">Latest export</div>
+            <code>{lastMergedPath}</code>
+          </div>
+        )}
       </div>
 
-      <div className="dashboard-actions">
-        <button className="btn btn-primary" onClick={handleMerge} disabled={!!progress || files.length === 0}>
-          Finalize & Merge Folder
-        </button>
-      </div>
-
-      <div className="files-container" style={{ marginTop: '3rem' }}>
-        <div 
-            className={`dropzone ${isDragOver ? 'drag-over' : ''}`}
-        >
-          <Upload size={32} />
-          <label htmlFor="file-upload" style={{ cursor: 'pointer' }}>Drop files here or click to upload</label>
-          <input 
-            type="file" 
-            id="file-upload" 
-            hidden 
-            multiple
-            onChange={handleFileUpload}
-          />
+      <section className="files-section">
+        <div className="section-heading">
+          <div>
+            <span className="section-kicker">Source files</span>
+            <h3>Ready to merge</h3>
+            <p>Click any file to preview it. Use the action menu for download, rename-safe export, or delete.</p>
+          </div>
         </div>
 
         <FileSection 
-          files={files} 
+          files={files}
           customerId={selectedCustomer.id.toString()}
           onPreview={onPreview}
           onNotify={(msg, type) => setNotification({ message: msg, type })}
-          onFileDeleted={loadCustomerData}
+          onFileDeleted={() => {
+            void loadCustomerData();
+          }}
         />
-      </div>
+      </section>
     </div>
   );
 };

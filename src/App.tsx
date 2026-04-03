@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { ArrowLeft, Search, Sparkles } from "lucide-react";
 import { CustomerList } from "./components/CustomerList";
 import Dashboard from "./components/Dashboard";
 import { Notification } from "./components/Notification";
@@ -14,18 +15,31 @@ const App: React.FC = () => {
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
     const [globalNotification, setGlobalNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
     const [previewFile, setPreviewFile] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState("");
 
     const handleSelectCustomer = (customer: Customer | null) => {
         setSelectedCustomer(customer);
-        setPreviewFile(null); // Reset preview when switching customers
+        setPreviewFile(null);
     };
 
     const handlePreview = (fileName: string) => {
         setPreviewFile(fileName);
     };
 
+    const notify = (message: string, type: 'success' | 'error' | 'info') => {
+        setGlobalNotification({ message, type });
+    };
+
+    const headerTitle = selectedCustomer ? selectedCustomer.name : "Customer Document Hub";
+    const headerSubtitle = selectedCustomer
+        ? "Review uploads, preview pages, and export a polished merged PDF straight to Downloads."
+        : "Create clean customer workspaces, drop files quickly, and keep every PDF batch ready to export.";
+
     return (
         <div className="app-container">
+            <div className="app-ambient app-ambient-one" />
+            <div className="app-ambient app-ambient-two" />
+
             {globalNotification && (
                 <div className="global-notification">
                     <Notification 
@@ -38,9 +52,37 @@ const App: React.FC = () => {
             
             <main className="main-panel">
                 <header className="panel-header">
-                    <h2>{selectedCustomer ? `Customer: ${selectedCustomer.name} (${selectedCustomer.id})` : 'Customers'}</h2>
-                    <div className="search-bar">
-                        <input type="text" placeholder="Search..." disabled />
+                    <div className="panel-brand">
+                        <span className="panel-eyebrow">
+                            <Sparkles size={14} />
+                            PDF Organiser
+                        </span>
+                        <div>
+                            <h1>{headerTitle}</h1>
+                            <p>{headerSubtitle}</p>
+                        </div>
+                    </div>
+
+                    <div className="panel-tools">
+                        {selectedCustomer ? (
+                            <>
+                                <div className="customer-pill">Customer ID {selectedCustomer.id}</div>
+                                <button className="btn btn-secondary" onClick={() => handleSelectCustomer(null)}>
+                                    <ArrowLeft size={16} />
+                                    Back to Customers
+                                </button>
+                            </>
+                        ) : (
+                            <label className="search-shell" aria-label="Search customers">
+                                <Search size={18} />
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(event) => setSearchQuery(event.target.value)}
+                                    placeholder="Search by customer name or ID"
+                                />
+                            </label>
+                        )}
                     </div>
                 </header>
                 
@@ -48,18 +90,14 @@ const App: React.FC = () => {
                     {!selectedCustomer ? (
                         <CustomerList 
                             onSelect={handleSelectCustomer} 
-                            onNotify={(message, type) => setGlobalNotification({ message, type })}
+                            onNotify={notify}
+                            searchQuery={searchQuery}
                         />
                     ) : (
-                        <div>
-                            <button className="back-btn" onClick={() => handleSelectCustomer(null)}>
-                                ← Back to Customers
-                            </button>
-                            <Dashboard 
-                                selectedCustomer={selectedCustomer} 
-                                onPreview={handlePreview}
-                            />
-                        </div>
+                        <Dashboard 
+                            selectedCustomer={selectedCustomer} 
+                            onPreview={handlePreview}
+                        />
                     )}
                 </div>
             </main>
@@ -69,6 +107,7 @@ const App: React.FC = () => {
                     customerId={selectedCustomer.id.toString()} 
                     fileName={previewFile} 
                     onClose={() => setPreviewFile(null)} 
+                    onNotify={notify}
                 />
             )}
         </div>
