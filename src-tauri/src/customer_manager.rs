@@ -14,14 +14,49 @@ use std::collections::HashMap;
 struct PdfiumWrapper(Pdfium);
 unsafe impl Send for PdfiumWrapper {}
 
-static PDFIUM: Lazy<Mutex<PdfiumWrapper>> = Lazy::new(|| {
-    // Attempt to bind to a local platform-specific library first, then system
-    let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./bin"))
-        .or_else(|_| Pdfium::bind_to_system_library())
-        .expect("Failed to bind to PDFium library. Ensure pdfium.dll/so is available.");
-    let pdfium = Pdfium::new(bindings);
-    Mutex::new(PdfiumWrapper(pdfium))
+static PDFIUM: Lazy<Result<Mutex<PdfiumWrapper>, String>> = Lazy::new(|| {
+    let mut search_paths = vec![
+        "./bin".to_string(),
+        "./src-tauri/bin".to_string(),
+    ];
+
+    // Add path relative to current executable
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            // In dev mode, exe is in target/debug, so we go up a few levels
+            if let Some(project_root) = exe_dir.parent().and_then(|p| p.parent()) {
+                search_paths.push(project_root.join("bin").to_string_lossy().to_string());
+                search_paths.push(project_root.join("src-tauri/bin").to_string_lossy().to_string());
+            }
+        }
+    }
+
+    for path in &search_paths {
+        let lib_path = Pdfium::pdfium_platform_library_name_at_path(path);
+        if Path::new(&lib_path).exists() {
+            match Pdfium::bind_to_library(&lib_path) {
+                Ok(bindings) => return Ok(Mutex::new(PdfiumWrapper(Pdfium::new(bindings)))),
+                Err(e) => {
+                    println!("Found lib at {}, but failed to bind: {:?}", lib_path.display(), e);
+                }
+            }
+        }
+    }
+
+    // Try system fallback
+    match Pdfium::bind_to_system_library() {
+        Ok(bindings) => Ok(Mutex::new(PdfiumWrapper(Pdfium::new(bindings)))),
+        Err(e) => Err(format!("Failed to find or bind PDFium. Paths tried: {:?}. System error: {:?}", search_paths, e))
+    }
 });
+
+macro_rules! get_pdfium {
+    () => {
+        PDFIUM.as_ref()
+            .map_err(|e| anyhow::anyhow!(e.clone()))?
+            .lock()
+    };
+}
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct FileMetadata {
@@ -101,43 +136,78 @@ impl CustomerManager {
     pub fn save_original_file(&self, customer_id: &str, file_name: &str, data: Vec<u8>) -> Result<String> {
         let target_dir = self.base_path.join(customer_id).join("original_files");
         if !target_dir.exists() { return Err(anyhow::anyhow!("Missing folder")); }
-
         let safe_name = self.generate_safe_filename(&target_dir, file_name);
         fs::write(target_dir.join(&safe_name), data)?;
         Ok(safe_name)
     }
 
+    pub fn upload_from_path(&self, customer_id: &str, file_path: &str) -> Result<String> {
+        let source = Path::new(file_path);
+        if !source.exists() {
+            return Err(anyhow::anyhow!("Source file does not exist: {}", file_path));
+        }
+        let file_name = source.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?;
+
+        let target_dir = self.base_path.join(customer_id).join("original_files");
+        if !target_dir.exists() { return Err(anyhow::anyhow!("Customer folder missing")); }
+
+        let safe_name = self.generate_safe_filename(&target_dir, file_name);
+        fs::copy(source, target_dir.join(&safe_name))?;
+        Ok(safe_name)
+    }
+
+    pub fn delete_file(&self, customer_id: &str, file_name: &str) -> Result<()> {
+        let original_file = self.base_path.join(customer_id).join("original_files").join(file_name);
+        let merged_file = self.base_path.join(customer_id).join("merged").join(file_name);
+        
+        let mut deleted = false;
+        if original_file.exists() {
+            fs::remove_file(original_file)?;
+            deleted = true;
+        }
+        if merged_file.exists() {
+            fs::remove_file(merged_file)?;
+            deleted = true;
+        }
+
+        if !deleted {
+            return Err(anyhow::anyhow!("File not found"));
+        }
+
+        // Cleanup metadata
+        if let Ok(mut meta) = self.get_customer_metadata(customer_id) {
+            meta.files.remove(file_name);
+            let _ = self.save_customer_metadata(customer_id, &meta);
+        }
+
+        Ok(())
+    }
+
     pub fn list_original_files(&self, customer_id: &str) -> Result<Vec<String>> {
         let mut files = Vec::new();
         
-        // Check original_files
+        // Only list user-uploaded original files
         let original_dir = self.base_path.join(customer_id).join("original_files");
         if original_dir.exists() {
             for entry in fs::read_dir(original_dir)? {
                 let entry = entry?;
-                if let Some(name) = entry.file_name().to_str() {
-                    files.push(name.to_string());
+                if entry.path().is_file() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        files.push(name.to_string());
+                    }
                 }
             }
         }
 
-        // Check merged
-        let merged_dir = self.base_path.join(customer_id).join("merged");
-        if merged_dir.exists() {
-            for entry in fs::read_dir(merged_dir)? {
-                let entry = entry?;
-                if let Some(name) = entry.file_name().to_str() {
-                    files.push(name.to_string());
-                }
-            }
-        }
-        
+        files.sort();
         Ok(files)
     }
 
     pub fn merge_documents<F>(&self, customer_id: &str, file_names: Vec<String>, progress: F) -> Result<String> 
     where F: Fn(String) {
-        let pdfium_guard = PDFIUM.lock();
+        let pdfium_guard = get_pdfium!();
         let pdfium = &pdfium_guard.0;
 
         let mut master_doc = pdfium.create_new_pdf()?;
@@ -169,7 +239,7 @@ impl CustomerManager {
     }
 
     pub fn extract_pages(&self, customer_id: &str, file_name: &str, page_indices: Vec<u16>) -> Result<String> {
-        let pdfium_guard = PDFIUM.lock();
+        let pdfium_guard = get_pdfium!();
         let pdfium = &pdfium_guard.0;
 
         let mut source_path = self.base_path.join(customer_id).join("original_files").join(file_name);
@@ -194,7 +264,7 @@ impl CustomerManager {
     }
 
     pub fn get_pdf_page_count(&self, customer_id: &str, file_name: &str) -> Result<u16> {
-        let pdfium_guard = PDFIUM.lock();
+        let pdfium_guard = get_pdfium!();
         let pdfium = &pdfium_guard.0;
 
         let mut path = self.base_path.join(customer_id).join("original_files").join(file_name);
@@ -207,7 +277,7 @@ impl CustomerManager {
     }
 
     pub fn render_pdf_page_to_base64(&self, customer_id: &str, file_name: &str, page_index: u16) -> Result<String> {
-        let pdfium_guard = PDFIUM.lock();
+        let pdfium_guard = get_pdfium!();
         let pdfium = &pdfium_guard.0;
 
         let mut path = self.base_path.join(customer_id).join("original_files").join(file_name);
@@ -267,7 +337,26 @@ impl CustomerManager {
         Ok(())
     }
 
+    pub fn copy_to_downloads(&self, customer_id: &str, file_name: &str) -> Result<String> {
+        let mut source_path = self.base_path.join(customer_id).join("merged").join(file_name);
+        if !source_path.exists() {
+            source_path = self.base_path.join(customer_id).join("original_files").join(file_name);
+        }
+        if !source_path.exists() {
+            return Err(anyhow::anyhow!("File not found"));
+        }
+
+        let download_dir = dirs::download_dir().ok_or_else(|| anyhow::anyhow!("Could not find Downloads directory"))?;
+        
+        let safe_name = self.generate_safe_filename(&download_dir, file_name);
+        let dest_path = download_dir.join(&safe_name);
+        
+        fs::copy(&source_path, &dest_path)?;
+        Ok(dest_path.to_string_lossy().to_string())
+    }
+
     fn generate_safe_filename(&self, dir: &Path, original_name: &str) -> String {
+
         let name = sanitize(original_name);
         let path = Path::new(&name);
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");

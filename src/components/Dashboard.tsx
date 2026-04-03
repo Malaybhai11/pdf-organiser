@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import FileSection from './FileSection';
 import { ProgressBar } from './ProgressBar';
 import { Notification } from './Notification';
-import { Layout, FileText, Scissors, Upload, Filter } from 'lucide-react';
+import { Upload } from 'lucide-react';
 
 interface Customer {
   id: string | number;
@@ -23,19 +24,75 @@ interface ProgressPayload {
 
 const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) => {
   const [files, setFiles] = useState<string[]>([]);
-  const [metadata, setMetadata] = useState<Record<string, { tags: string[] }>>({});
   const [progress, setProgress] = useState<{ message: string; percentage: number } | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [filter, setFilter] = useState<string>('All');
+  const [isDragOver, setIsDragOver] = useState(false);
+  const selectedCustomerRef = useRef(selectedCustomer);
+  const lastDropTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    selectedCustomerRef.current = selectedCustomer;
+  }, [selectedCustomer]);
 
   useEffect(() => {
     if (selectedCustomer) {
       loadCustomerData();
     } else {
       setFiles([]);
-      setMetadata({});
     }
   }, [selectedCustomer]);
+
+  // Tauri native file drop listener
+  useEffect(() => {
+    const appWindow = getCurrentWebviewWindow();
+    let unlistenDrop: (() => void) | null = null;
+
+    appWindow.onDragDropEvent((event) => {
+      if (event.payload.type === 'enter') {
+        setIsDragOver(true);
+      } else if (event.payload.type === 'leave') {
+        setIsDragOver(false);
+      } else if (event.payload.type === 'drop') {
+        setIsDragOver(false);
+        const now = Date.now();
+        if (now - lastDropTimeRef.current < 500) {
+            // Ignore rapid duplicate drop events
+            return;
+        }
+        lastDropTimeRef.current = now;
+
+        const customer = selectedCustomerRef.current;
+        if (!customer) return;
+
+        const paths: string[] = (event.payload as any).paths ?? [];
+        if (paths.length === 0) return;
+
+        (async () => {
+          let successCount = 0;
+          for (const filePath of paths) {
+            try {
+              await invoke('upload_file_from_path', {
+                customerId: customer.id.toString(),
+                filePath,
+              });
+              successCount++;
+            } catch (err) {
+              console.error(`Upload failed for ${filePath}:`, err);
+              setNotification({ message: `Upload failed: ${filePath.split('/').pop()}`, type: 'error' });
+            }
+          }
+          if (successCount > 0) {
+            loadCustomerData();
+            setNotification({ message: `Uploaded ${successCount} file(s)`, type: 'success' });
+          }
+        })();
+      }
+    }).then((fn) => { unlistenDrop = fn; });
+
+    return () => {
+      if (unlistenDrop) unlistenDrop();
+    };
+  }, []);
 
   useEffect(() => {
     const setupListener = async () => {
@@ -55,39 +112,49 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
   }, []);
 
   const loadCustomerData = async () => {
-    if (!selectedCustomer) return;
+    if (!selectedCustomerRef.current) return;
     try {
-      const filesResp = await invoke<any>('get_customer_files', { customerId: selectedCustomer.id.toString() });
-      const metaResp = await invoke<any>('get_customer_metadata', { customerId: selectedCustomer.id.toString() });
-      
+      const filesResp = await invoke<any>('get_customer_files', { customerId: selectedCustomerRef.current.id.toString() });
       if (filesResp.success) setFiles(filesResp.data);
-      if (metaResp.success) setMetadata(metaResp.data.files || {});
     } catch (err) {
       setNotification({ message: "Failed to load customer data", type: 'error' });
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedCustomer || !e.target.files) return;
-    const file = e.target.files[0];
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const arrayBuffer = reader.result as ArrayBuffer;
-      const uint8Array = new Uint8Array(arrayBuffer);
-      try {
-        await invoke('save_customer_file', {
-          customerId: selectedCustomer.id.toString(),
-          fileName: file.name,
-          fileData: Array.from(uint8Array)
-        });
+  const processUploadedFiles = async (uploadedFiles: File[]) => {
+    if (!selectedCustomer) return;
+    
+    let successCount = 0;
+    
+    for (const file of uploadedFiles) {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            
+            await invoke('save_customer_file', {
+                customerId: selectedCustomer.id.toString(),
+                fileName: file.name,
+                fileData: Array.from(uint8Array)
+            });
+            successCount++;
+        } catch (err) {
+            console.error(`Upload failed for ${file.name}:`, err);
+            setNotification({ message: `Upload failed: ${file.name}`, type: 'error' });
+        }
+    }
+    
+    if (successCount > 0) {
         loadCustomerData();
-        setNotification({ message: `Uploaded ${file.name}`, type: 'success' });
-      } catch (err) {
-        setNotification({ message: "Upload failed", type: 'error' });
-      }
-    };
-    reader.readAsArrayBuffer(file);
+        setNotification({ message: `Successfully uploaded ${successCount} file(s)`, type: 'success' });
+    }
   };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      processUploadedFiles(Array.from(e.target.files));
+    }
+  };
+
 
   const handleMerge = async () => {
     if (!selectedCustomer || files.length === 0) return;
@@ -112,62 +179,7 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
     }
   };
 
-  const handleQuickExtract = async (template: string, pages: number[], tag: string) => {
-    if (!selectedCustomer) return;
-    const sourceFile = files.find(f => f === "final.pdf") || files.find(f => f.endsWith(".pdf"));
-    if (!sourceFile) {
-      setNotification({ message: "No PDF found to extract from", type: 'error' });
-      return;
-    }
-
-    setProgress({ message: `Extracting ${template}...`, percentage: 20 });
-    try {
-      const resp = await invoke<any>('extract_pages', {
-        customerId: selectedCustomer.id.toString(),
-        fileName: sourceFile,
-        pageIndices: pages
-      });
-      if (resp.success) {
-        await handleTagUpdate(resp.data, [tag]);
-        setNotification({ message: `${template} created and tagged as ${tag}`, type: 'success' });
-        loadCustomerData();
-      } else {
-        setNotification({ message: resp.error || "Extraction failed", type: 'error' });
-      }
-    } catch (err) {
-      setNotification({ message: "Extraction process error", type: 'error' });
-    } finally {
-      setProgress(null);
-    }
-  };
-
-  const handleTagUpdate = async (fileName: string, tags: string[]) => {
-    if (!selectedCustomer) return;
-    try {
-      await invoke('update_file_tags', {
-        customerId: selectedCustomer.id.toString(),
-        fileName,
-        tags
-      });
-      loadCustomerData();
-    } catch (err) {
-      setNotification({ message: "Failed to update tags", type: 'error' });
-    }
-  };
-
-  const filteredFiles = filter === 'All' 
-    ? files 
-    : files.filter(f => metadata[f]?.tags?.includes(filter));
-
-  if (!selectedCustomer) {
-    return (
-      <div className="empty-state">
-        <div className="placeholder-icon"><Layout size={64} /></div>
-        <h3>Select a customer to start managing documents</h3>
-        <p>Manage invoices, service reports, and visit forms in one place.</p>
-      </div>
-    );
-  }
+  if (!selectedCustomer) return null;
 
   return (
     <div className="dashboard">
@@ -183,65 +195,38 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedCustomer, onPreview }) =>
         <ProgressBar percentage={progress.percentage} message={progress.message} />
       )}
 
+      <div className="dashboard-header">
+          <h2>{selectedCustomer.name}</h2>
+          <span className="folder-id">ID: {selectedCustomer.id}</span>
+      </div>
+
       <div className="dashboard-actions">
-        <button className="action-card" onClick={handleMerge} disabled={!!progress}>
-          <div className="action-icon-wrap"><FileText size={24} /></div>
-          <div className="action-info">
-            <span>Finalize Folder</span>
-            <small>Merge all files into final.pdf</small>
-          </div>
+        <button className="btn btn-primary" onClick={handleMerge} disabled={!!progress || files.length === 0}>
+          Finalize & Merge Folder
         </button>
-        <div className="quick-extract-group">
-          <button className="action-card" onClick={() => handleQuickExtract("Visit Form", [0, 1], "Visit Form")} disabled={!!progress}>
-            <div className="action-icon-wrap"><Scissors size={24} /></div>
-            <div className="action-info">
-              <span>Visit Form</span>
-              <small>Extract Pages 1-2</small>
-            </div>
-          </button>
-          <button className="action-card" onClick={() => handleQuickExtract("Invoice", [0], "Invoice")} disabled={!!progress}>
-            <div className="action-icon-wrap"><Scissors size={24} /></div>
-            <div className="action-info">
-              <span>Invoice</span>
-              <small>Extract Page 1</small>
-            </div>
-          </button>
-        </div>
       </div>
 
-      <div className="section-title">
-        <Filter size={18} />
-        <h3>Filter by Tag</h3>
-      </div>
-      <div className="filter-bar">
-        {['All', 'Invoice', 'Service', 'Visit Form'].map(f => (
-          <button 
-            key={f} 
-            className={`filter-btn ${filter === f ? 'active' : ''}`}
-            onClick={() => setFilter(f)}
-          >
-            {f}
-          </button>
-        ))}
-      </div>
-
-      <div className="files-container">
-        <label className="dropzone">
+      <div className="files-container" style={{ marginTop: '3rem' }}>
+        <div 
+            className={`dropzone ${isDragOver ? 'drag-over' : ''}`}
+        >
           <Upload size={32} />
-          <p>Click or drag files here to upload</p>
+          <label htmlFor="file-upload" style={{ cursor: 'pointer' }}>Drop files here or click to upload</label>
           <input 
             type="file" 
             id="file-upload" 
             hidden 
+            multiple
             onChange={handleFileUpload}
           />
-        </label>
+        </div>
 
         <FileSection 
-          files={filteredFiles} 
-          metadata={metadata} 
-          onTagUpdate={handleTagUpdate}
+          files={files} 
+          customerId={selectedCustomer.id.toString()}
           onPreview={onPreview}
+          onNotify={(msg, type) => setNotification({ message: msg, type })}
+          onFileDeleted={loadCustomerData}
         />
       </div>
     </div>

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import Sidebar from "./components/Sidebar";
+import { CustomerList } from "./components/CustomerList";
 import Dashboard from "./components/Dashboard";
 import { Notification } from "./components/Notification";
 import { PdfPreview } from "./PdfPreview";
@@ -36,24 +36,31 @@ const App: React.FC = () => {
                 </div>
             )}
             
-            <Sidebar 
-                onSelectCustomer={handleSelectCustomer} 
-                selectedCustomerId={selectedCustomer?.id || null} 
-            />
-            
             <main className="main-panel">
                 <header className="panel-header">
-                    <h2>{selectedCustomer ? `Customer: ${selectedCustomer.name}` : 'Document Management'}</h2>
+                    <h2>{selectedCustomer ? `Customer: ${selectedCustomer.name} (${selectedCustomer.id})` : 'Customers'}</h2>
                     <div className="search-bar">
-                        <input type="text" placeholder="Global search..." disabled />
+                        <input type="text" placeholder="Search..." disabled />
                     </div>
                 </header>
                 
                 <div className="main-content">
-                    <Dashboard 
-                        selectedCustomer={selectedCustomer} 
-                        onPreview={handlePreview}
-                    />
+                    {!selectedCustomer ? (
+                        <CustomerList 
+                            onSelect={handleSelectCustomer} 
+                            onNotify={(message, type) => setGlobalNotification({ message, type })}
+                        />
+                    ) : (
+                        <div>
+                            <button className="back-btn" onClick={() => handleSelectCustomer(null)}>
+                                ← Back to Customers
+                            </button>
+                            <Dashboard 
+                                selectedCustomer={selectedCustomer} 
+                                onPreview={handlePreview}
+                            />
+                        </div>
+                    )}
                 </div>
             </main>
 

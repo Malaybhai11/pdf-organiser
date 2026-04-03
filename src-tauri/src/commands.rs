@@ -181,3 +181,36 @@ pub async fn update_file_tags(
         .map(|_| CommandResponse::ok(()))
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn download_file(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+) -> Result<CommandResponse<String>, String> {
+    manager.copy_to_downloads(&customer_id, &file_name)
+        .map(|path| CommandResponse::ok(path))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_file(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+) -> Result<CommandResponse<()>, String> {
+    manager.delete_file(&customer_id, &file_name)
+        .map(|_| CommandResponse::ok(()))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn upload_file_from_path(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_path: String,
+) -> Result<CommandResponse<String>, String> {
+    manager.upload_from_path(&customer_id, &file_path)
+        .map(|name| CommandResponse::ok(name))
+        .map_err(|e| e.to_string())
+}

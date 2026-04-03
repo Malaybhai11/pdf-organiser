@@ -1,68 +1,135 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface FileSectionProps {
   files: string[];
-  metadata: Record<string, { tags: string[] }>;
-  onTagUpdate: (fileName: string, tags: string[]) => void;
+  customerId: string;
   onPreview: (fileName: string) => void;
+  onNotify: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onFileDeleted?: () => void;
 }
 
-const FileSection: React.FC<FileSectionProps> = ({ files, metadata, onTagUpdate, onPreview }) => {
-  const availableTags = ['Invoice', 'Service', 'Visit Form'];
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  file: string | null;
+}
 
-  const toggleTag = (fileName: string, tag: string) => {
-    const currentTags = metadata[fileName]?.tags || [];
-    const newTags = currentTags.includes(tag)
-      ? currentTags.filter(t => t !== tag)
-      : [...currentTags, tag];
-    onTagUpdate(fileName, newTags);
+const FileSection: React.FC<FileSectionProps> = ({ files, customerId, onPreview, onNotify, onFileDeleted }) => {
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null });
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setContextMenu({ ...contextMenu, visible: false });
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [contextMenu]);
+
+  const handleFileClick = (e: React.MouseEvent, file: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      file
+    });
   };
 
-  // Only show files that are not "final.pdf" in the original files section
-  const originalFiles = files.filter(f => f !== "final.pdf");
-  const finalizedFile = files.find(f => f === "final.pdf");
+  const handleCopy = async () => {
+    if (contextMenu.file) {
+      try {
+        await navigator.clipboard.writeText(contextMenu.file);
+        onNotify(`Copied filename: ${contextMenu.file}`, 'success');
+      } catch (err) {
+        onNotify('Failed to copy to clipboard', 'error');
+      }
+    }
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  const handleDownload = async () => {
+    if (contextMenu.file && customerId) {
+      try {
+        const resp = await invoke<any>('download_file', { 
+            customerId: customerId.toString(), 
+            fileName: contextMenu.file 
+        });
+        if (resp.success) {
+            onNotify(`Downloaded to: ${resp.data}`, 'success');
+        } else {
+            onNotify(resp.error || 'Failed to download', 'error');
+        }
+      } catch (err) {
+        onNotify('Failed to trigger download', 'error');
+      }
+    }
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  const handleDelete = async () => {
+    if (contextMenu.file && customerId) {
+      const confirmDelete = window.confirm(`Are you sure you want to delete ${contextMenu.file}?`);
+      if (confirmDelete) {
+        try {
+          const resp = await invoke<any>('delete_file', { 
+              customerId: customerId.toString(), 
+              fileName: contextMenu.file 
+          });
+          if (resp.success) {
+              onNotify(`Deleted ${contextMenu.file}`, 'success');
+              if (onFileDeleted) onFileDeleted();
+          } else {
+              onNotify(resp.error || 'Failed to delete file', 'error');
+          }
+        } catch (err) {
+          onNotify('Failed to trigger delete', 'error');
+        }
+      }
+    }
+    setContextMenu({ ...contextMenu, visible: false });
+  };
 
   return (
-    <div className="files-section">
-      {finalizedFile && (
-        <div className="finalized-file-card">
-          <div className="card-badge">Finalized Version</div>
-          <div className="file-row highlight">
-            <span className="file-icon">✅</span>
-            <span className="file-name">{finalizedFile}</span>
-            <button className="primary-btn sm" onClick={() => onPreview(finalizedFile)}>Open Preview</button>
+    <div className="file-grid" style={{ position: 'relative' }}>
+      {files.length === 0 ? (
+        <p className="empty-msg" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No files uploaded.</p>
+      ) : (
+        files.map(file => (
+          <div 
+            key={file} 
+            className="file-item" 
+            onDoubleClick={() => onPreview(file)}
+            onClick={(e) => handleFileClick(e, file)}
+          >
+            <div className="file-icon"></div>
+            <span className="file-name" title={file}>{file}</span>
           </div>
-        </div>
+        ))
       )}
 
-      <div className="files-header">
-        <h3>Original Files</h3>
-      </div>
-      <div className="file-list">
-        {originalFiles.length === 0 ? (
-          <p className="empty-msg">No files uploaded yet.</p>
-        ) : (
-          originalFiles.map(file => (
-            <div key={file} className="file-row">
-              <span className="file-icon">📄</span>
-              <span className="file-name" title={file}>{file}</span>
-              <div className="tag-picker-inline">
-                {availableTags.map(tag => (
-                  <button
-                    key={tag}
-                    className={`tag-dot ${metadata[file]?.tags?.includes(tag) ? 'active' : ''}`}
-                    onClick={() => toggleTag(file, tag)}
-                    title={tag}
-                  >
-                    {tag[0]}
-                  </button>
-                ))}
-              </div>
-              <button className="secondary-btn sm" onClick={() => onPreview(file)}>Preview</button>
+      {contextMenu.visible && (
+        <div 
+            className="context-menu" 
+            style={{ 
+                top: contextMenu.y, 
+                left: contextMenu.x 
+            }}
+            onClick={(e) => e.stopPropagation()}
+        >
+            <div className="context-menu-item" onClick={handleCopy}>
+                Copy Filename to Clipboard
             </div>
-          ))
-        )}
-      </div>
+            <div className="context-menu-item" onClick={handleDownload}>
+                Download to /Downloads
+            </div>
+            <div className="context-menu-item delete-item" onClick={handleDelete}>
+                Delete File
+            </div>
+        </div>
+      )}
     </div>
   );
 };
