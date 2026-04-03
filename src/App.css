@@ -1,18 +1,11 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color: #f6f6f6;
+  background-color: #0f0f0f;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -23,94 +16,164 @@
 
 .container {
   margin: 0;
-  padding-top: 10vh;
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  background-color: #1a1a1a;
+  border-right: 1px solid #333;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  padding: 20px;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
+.sidebar h2 {
+  font-size: 1.2rem;
+  margin-bottom: 20px;
+  color: #999;
 }
 
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
+.customer-list {
+  flex: 1;
+  overflow-y: auto;
 }
 
-.row {
+.customer-item {
+  padding: 10px 15px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 5px;
+  transition: background 0.2s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customer-item:hover {
+  background-color: #333;
+}
+
+.customer-item.active {
+  background-color: #3e63dd;
+  color: white;
+}
+
+.new-customer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid #333;
+}
+
+/* Main Panel */
+.main-panel {
+  flex: 1;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  padding: 40px;
+  overflow-y: auto;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
 }
 
-a:hover {
-  color: #535bf2;
+.header h1 {
+  font-size: 2rem;
+  margin: 0;
 }
 
-h1 {
+/* Dropzone */
+.dropzone {
+  border: 2px dashed #444;
+  border-radius: 12px;
+  padding: 60px 20px;
   text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
+  transition: all 0.2s;
+  background: #141414;
+  margin-bottom: 30px;
   cursor: pointer;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+.dropzone.dragging {
+  border-color: #3e63dd;
+  background: #1e293b;
 }
 
-input,
+.dropzone p {
+  color: #888;
+  font-size: 1.1rem;
+}
+
+.uploading-overlay {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  color: #3e63dd;
+}
+
+/* File List */
+.file-list {
+  background: #1a1a1a;
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.file-item {
+  padding: 12px 20px;
+  border-bottom: 1px solid #222;
+  display: flex;
+  align-items: center;
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.empty-state {
+  color: #666;
+  text-align: center;
+  padding: 40px;
+}
+
+/* Buttons and Inputs */
+input[type="text"] {
+  background: #222;
+  border: 1px solid #444;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  width: 100%;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+}
+
 button {
-  outline: none;
+  background-color: #3e63dd;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.2s;
 }
 
-#greet-input {
-  margin-right: 5px;
+button:hover {
+  opacity: 0.9;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+button:disabled {
+  background-color: #444;
+  cursor: not-allowed;
+}
 
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+button.secondary {
+  background-color: #2a2a2a;
 }
