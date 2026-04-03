@@ -295,3 +295,88 @@ button.secondary {
   font-weight: bold;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
+
+/* Tagging & Filtering */
+.tag-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.tag {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #333;
+  color: #ccc;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tag.active {
+  background: #3e63dd;
+  color: white;
+}
+
+.tag-invoice { background: #E54D2E; color: white; }
+.tag-service { background: #3E63DD; color: white; }
+.tag-visit { background: #46A758; color: white; }
+
+.filters {
+  display: flex;
+  gap: 10px;
+  margin: 15px 0;
+  padding: 10px;
+  background: #1a1a1a;
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.filter-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #2a2a2a;
+  color: #888;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.filter-btn.active {
+  background: #3e63dd;
+  color: white;
+  border-color: #5d7df3;
+}
+
+.file-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.tag-picker {
+  display: flex;
+  gap: 5px;
+}
+
+.tag-option {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  border: 1px solid #444;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+
+.tag-option:hover {
+  background: #333;
+}
+
+.tag-option.selected {
+  background: #3e63dd;
+  color: white;
+  border-color: #3e63dd;
+}

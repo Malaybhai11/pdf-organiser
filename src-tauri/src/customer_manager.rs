@@ -181,6 +181,33 @@ impl CustomerManager {
         Ok(format!("data:image/png;base64,{}", b64))
     }
 
+    /// Gets the metadata for a specific customer.
+    pub fn get_customer_metadata(&self, customer_id: &str) -> Result<CustomerMetadata> {
+        let metadata_path = self.base_path.join(customer_id).join("metadata.json");
+        if !metadata_path.exists() {
+            return Ok(CustomerMetadata::default());
+        }
+        let content = fs::read_to_string(&metadata_path)?;
+        let metadata: CustomerMetadata = serde_json::from_str(&content)?;
+        Ok(metadata)
+    }
+
+    /// Saves the metadata for a specific customer.
+    pub fn save_customer_metadata(&self, customer_id: &str, metadata: &CustomerMetadata) -> Result<()> {
+        let metadata_path = self.base_path.join(customer_id).join("metadata.json");
+        let content = serde_json::to_string_pretty(metadata)?;
+        fs::write(metadata_path, content)?;
+        Ok(())
+    }
+
+    /// Updates tags for a specific file.
+    pub fn update_file_tags(&self, customer_id: &str, file_name: &str, tags: Vec<String>) -> Result<()> {
+        let mut metadata = self.get_customer_metadata(customer_id)?;
+        metadata.files.insert(file_name.to_string(), FileMetadata { tags });
+        self.save_customer_metadata(customer_id, &metadata)?;
+        Ok(())
+    }
+
     fn append_image_to_pdf(&self, doc: &mut PdfDocument, image_path: &Path) -> Result<()> {
         let img = image::open(image_path)?;
         let (width, height) = img.dimensions();

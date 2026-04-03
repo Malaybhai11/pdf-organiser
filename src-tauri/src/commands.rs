@@ -128,3 +128,25 @@ pub async fn render_pdf_page(
         .map(|b64| CommandResponse::ok(b64))
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn get_customer_metadata(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+) -> Result<CommandResponse<crate::customer_manager::CustomerMetadata>, String> {
+    manager.get_customer_metadata(&customer_id)
+        .map(|meta| CommandResponse::ok(meta))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_file_tags(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+    tags: Vec<String>,
+) -> Result<CommandResponse<()>, String> {
+    manager.update_file_tags(&customer_id, &file_name, tags)
+        .map(|_| CommandResponse::ok(()))
+        .map_err(|e| e.to_string())
+}

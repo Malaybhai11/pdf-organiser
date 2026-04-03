@@ -43,6 +43,8 @@ pub fn run() {
             commands::extract_pages,
             commands::get_pdf_page_count,
             commands::render_pdf_page,
+            commands::get_customer_metadata,
+            commands::update_file_tags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
