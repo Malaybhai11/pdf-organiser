@@ -8,6 +8,7 @@ interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  user_feedback?: string;
 }
 
 interface ProgressPayload {
@@ -114,6 +115,71 @@ function App() {
     } catch (err) { console.error(err); }
   };
 
+  const handleFinalize = async () => {
+    if (!selectedCustomerId || files.length === 0) {
+      setMergeStatus("Error: No files to finalize.");
+      return;
+    }
+    setIsMerging(true);
+    setMergeStatus("Finalizing customer folder...");
+    try {
+      const response: ApiResponse<string> = await invoke("merge_documents", {
+        customerId: selectedCustomerId,
+        fileNames: files,
+      });
+      if (response.success) {
+        setMergeStatus(`Finalized successfully as ${response.data}`);
+        await fetchFiles(selectedCustomerId);
+        await fetchMetadata(selectedCustomerId);
+      } else {
+        setMergeStatus(`Error: ${response.error}`);
+      }
+    } catch (err) {
+      setMergeStatus(`Failed to finalize: ${err}`);
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
+  const handleQuickExtract = async (templateName: string, pages: number[], tag: Tag) => {
+    if (!selectedCustomerId) return;
+    
+    // We usually extract from the final.pdf if it exists, otherwise the first PDF
+    const sourceFile = files.find(f => f === "final.pdf") || files.find(f => f.endsWith(".pdf"));
+    
+    if (!sourceFile) {
+      setMergeStatus("Error: No PDF found to extract from.");
+      return;
+    }
+
+    setMergeStatus(`Extracting ${templateName}...`);
+    try {
+      const response: ApiResponse<string> = await invoke("extract_pages", {
+        customerId: selectedCustomerId,
+        fileName: sourceFile,
+        pageIndices: pages,
+      });
+
+      if (response.success && response.data) {
+        const newFileName = response.data;
+        // Auto-tag the extracted file
+        await invoke("update_file_tags", {
+          customerId: selectedCustomerId,
+          fileName: newFileName,
+          tags: [tag],
+        });
+        
+        setMergeStatus(`${templateName} created and tagged!`);
+        await fetchFiles(selectedCustomerId);
+        await fetchMetadata(selectedCustomerId);
+      } else {
+        setMergeStatus(`Error: ${response.error}`);
+      }
+    } catch (err) {
+      setMergeStatus(`Failed to extract: ${err}`);
+    }
+  };
+
   const filteredFiles = useMemo(() => {
     if (activeFilter === "All") return files;
     return files.filter(file => metadata[file]?.tags.includes(activeFilter as Tag));
@@ -189,12 +255,27 @@ function App() {
             <header className="header">
               <h1>{selectedCustomerId}</h1>
               <div className="header-actions">
-                {mergeStatus && <span className="status-text">{mergeStatus}</span>}
-                <button onClick={handleMerge} disabled={isMerging || files.length === 0}>
-                  {isMerging ? "Merging..." : "Merge All"}
+                <button onClick={handleFinalize} disabled={isMerging || files.length === 0} className="primary-btn">
+                  Finalize & Merge
                 </button>
               </div>
             </header>
+
+            <div className="workflow-bar">
+               <span className="workflow-label">Quick Templates:</span>
+               <button className="secondary-btn" onClick={() => handleQuickExtract("Visit Form", [0, 1], "Visit Form")}>
+                 Visit Form (P1-2)
+               </button>
+               <button className="secondary-btn" onClick={() => handleQuickExtract("Invoice", [0], "Invoice")}>
+                 Invoice (P1)
+               </button>
+            </div>
+
+            {mergeStatus && (
+              <div className={`status-banner ${mergeStatus.startsWith("Error") ? "error" : "success"}`}>
+                {mergeStatus}
+              </div>
+            )}
 
             <div className="filters">
               <button className={`filter-btn ${activeFilter === "All" ? "active" : ""}`} onClick={() => setActiveFilter("All")}>All</button>
