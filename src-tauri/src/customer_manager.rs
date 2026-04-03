@@ -147,6 +147,40 @@ impl CustomerManager {
         Ok(output_name)
     }
 
+    /// Gets the total page count of a PDF.
+    pub fn get_pdf_page_count(&self, customer_id: &str, file_name: &str) -> Result<u16> {
+        let pdfium = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&self.pdfium_path))
+            .or_else(|_| Pdfium::bind_to_system_library())?;
+
+        let path = self.base_path.join(customer_id).join("merged").join(file_name);
+        let doc = pdfium.load_pdf_from_file(&path, None)?;
+        Ok(doc.pages().len())
+    }
+
+    /// Renders a specific PDF page to a base64 encoded PNG.
+    pub fn render_pdf_page_to_base64(&self, customer_id: &str, file_name: &str, page_index: u16) -> Result<String> {
+        let pdfium = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&self.pdfium_path))
+            .or_else(|_| Pdfium::bind_to_system_library())?;
+
+        let path = self.base_path.join(customer_id).join("merged").join(file_name);
+        let doc = pdfium.load_pdf_from_file(&path, None)?;
+        
+        let page = doc.pages().get(page_index)
+            .context("Page index out of bounds")?;
+
+        // Render at a fixed thumbnail size
+        let bitmap = page.render(300, 400, None)?;
+        let image_data = bitmap.as_image(); // This gives us a dynamic image from the image crate
+        
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        image_data.write_to(&mut buffer, image::ImageFormat::Png)?;
+        
+        use base64::{Engine as _, engine::general_purpose};
+        let b64 = general_purpose::STANDARD.encode(buffer.into_inner());
+        
+        Ok(format!("data:image/png;base64,{}", b64))
+    }
+
     fn append_image_to_pdf(&self, doc: &mut PdfDocument, image_path: &Path) -> Result<()> {
         let img = image::open(image_path)?;
         let (width, height) = img.dimensions();

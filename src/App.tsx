@@ -1,6 +1,7 @@
 import { useState, useEffect, DragEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { PdfPreview } from "./PdfPreview";
 import "./App.css";
 
 interface ApiResponse<T> {
@@ -24,6 +25,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState("");
   const [mergeStatus, setMergeStatus] = useState("");
   const [isMerging, setIsMerging] = useState(false);
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
 
   // Fetch all customers on mount
   useEffect(() => {
@@ -35,9 +37,14 @@ function App() {
     let unlisten: (() => void) | undefined;
     
     const setupListener = async () => {
-      unlisten = await listen<ProgressPayload>("pdf-progress", (event) => {
-        setMergeStatus(event.payload.message);
-      });
+      try {
+        const unlistenFn = await listen<ProgressPayload>("pdf-progress", (event) => {
+          setMergeStatus(event.payload.message);
+        });
+        unlisten = unlistenFn;
+      } catch (err) {
+        console.error("Failed to setup event listener:", err);
+      }
     };
 
     setupListener();
@@ -134,7 +141,7 @@ function App() {
 
       if (response.success) {
         setMergeStatus("Successfully merged into final.pdf!");
-        // Refresh or notify user
+        await fetchFiles(selectedCustomerId); // Refresh to show final.pdf
       } else {
         setMergeStatus("Error: " + response.error);
       }
@@ -237,8 +244,13 @@ function App() {
 
             <div className="file-list">
               {files.map((file) => (
-                <div key={file} className="file-item">
-                  📄 {file}
+                <div 
+                  key={file} 
+                  className="file-item"
+                  onClick={() => file.endsWith(".pdf") && setPreviewFile(file)}
+                  style={{ cursor: file.endsWith(".pdf") ? "pointer" : "default" }}
+                >
+                  📄 {file} {file.endsWith(".pdf") && <span style={{ color: "#3e63dd", marginLeft: "10px", fontSize: "0.8rem" }}> (click to preview)</span>}
                 </div>
               ))}
               {files.length === 0 && !isUploading && (
@@ -248,6 +260,15 @@ function App() {
           </>
         )}
       </main>
+
+      {/* PDF Preview Overlay */}
+      {previewFile && selectedCustomerId && (
+        <PdfPreview
+          customerId={selectedCustomerId}
+          fileName={previewFile}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </div>
   );
 }

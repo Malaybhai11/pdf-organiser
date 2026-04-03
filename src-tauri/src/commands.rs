@@ -105,3 +105,26 @@ pub async fn extract_pages(
         .map(|name| CommandResponse::ok(name))
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn get_pdf_page_count(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+) -> Result<CommandResponse<u16>, String> {
+    manager.get_pdf_page_count(&customer_id, &file_name)
+        .map(|count| CommandResponse::ok(count))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn render_pdf_page(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+    page_index: u16,
+) -> Result<CommandResponse<String>, String> {
+    manager.render_pdf_page_to_base64(&customer_id, &file_name, page_index)
+        .map(|b64| CommandResponse::ok(b64))
+        .map_err(|e| e.to_string())
+}
