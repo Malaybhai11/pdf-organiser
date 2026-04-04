@@ -24,6 +24,15 @@ static PDFIUM: Lazy<Result<Mutex<PdfiumWrapper>, String>> = Lazy::new(|| {
     // Add path relative to current executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
+            search_paths.push(exe_dir.to_string_lossy().to_string());
+            search_paths.push(exe_dir.join("bin").to_string_lossy().to_string());
+            search_paths.push(exe_dir.join("resources").join("bin").to_string_lossy().to_string());
+
+            if let Some(parent_dir) = exe_dir.parent() {
+                search_paths.push(parent_dir.join("Resources").join("bin").to_string_lossy().to_string());
+                search_paths.push(parent_dir.join("resources").join("bin").to_string_lossy().to_string());
+            }
+
             // In dev mode, exe is in target/debug, so we go up a few levels
             if let Some(project_root) = exe_dir.parent().and_then(|p| p.parent()) {
                 search_paths.push(project_root.join("bin").to_string_lossy().to_string());
