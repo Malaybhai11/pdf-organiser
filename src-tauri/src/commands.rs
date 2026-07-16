@@ -281,3 +281,23 @@ pub async fn split_pdf_by_range(
         .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }
+
+
+#[tauri::command]
+pub async fn merge_with_progress(
+    window: Window,
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_names: Vec<String>,
+) -> Result<CommandResponse<String>, String> {
+    let total = file_names.len();
+    for (i, file_name) in file_names.iter().enumerate() {
+        let _ = window.emit("merge-progress", ProgressPayload {
+            status: "merging".to_string(),
+            message: format!("Merging file {} of {}: {}", i + 1, total, file_name),
+        });
+    }
+    manager.merge_documents(&customer_id, &file_names)
+        .map(|path| CommandResponse::ok(path))
+        .map_err(|e| e.to_string())
+}
