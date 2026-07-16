@@ -574,3 +574,56 @@ mod tests {
         Ok(())
     }
 }
+
+    pub fn get_pdf_metadata(&self, customer_id: &str, file_name: &str) -> Result<super::commands::PdfMetadata> {
+        let file_path = self.base_path.join(customer_id).join("original_files").join(file_name);
+        if !file_path.exists() {
+            anyhow::bail!("File not found: {}", file_name);
+        }
+        
+        let file_size = fs::metadata(&file_path)?.len();
+        let file_name = file_name.to_string();
+        
+        // Try to extract PDF metadata using pdfium
+        let pdfium = PDFIUM.lock().unwrap();
+        if let Ok(ref pdfium) = *pdfium {
+            if let Ok(doc) = pdfium.0.load_pdf_from_file(&file_path, None) {
+                let page_count = doc.pages().len();
+                let title = doc.title().map(|s| s.to_string());
+                let author = doc.author().map(|s| s.to_string());
+                let creator = doc.creator().map(|s| s.to_string());
+                let producer = doc.producer().map(|s| s.to_string());
+                let created = doc.creation_date().map(|d| d.to_string());
+                let modified = doc.mod_date().map(|d| d.to_string());
+                
+                return Ok(super::commands::PdfMetadata {
+                    title, author, creator, producer,
+                    page_count, created, modified,
+                    file_size, file_name,
+                });
+            }
+        }
+        
+        // Fallback: basic info without pdfium parsing
+        if file_path.extension().map_or(false, |e| e == "pdf") {
+            let buf = fs::read(&file_path)?;
+            let page_count = Self::count_pdf_pages_fallback(&buf);
+            return Ok(super::commands::PdfMetadata {
+                title: None, author: None, creator: None, producer: None,
+                page_count, created: None, modified: None,
+                file_size, file_name,
+            });
+        }
+        
+        Ok(super::commands::PdfMetadata {
+            title: None, author: None, creator: None, producer: None,
+            page_count: 0, created: None, modified: None,
+            file_size, file_name,
+        })
+    }
+    
+    fn count_pdf_pages_fallback(buf: &[u8]) -> usize {
+        // Simple /Type /Page count as fallback when pdfium can't open
+        let text = String::from_utf8_lossy(buf);
+        text.matches("/Type /Page").count()
+    }

@@ -39,6 +39,7 @@ pub fn run() {
             commands::delete_file,
             commands::upload_file_from_path,
             commands::upload_files_from_paths,
+            commands::get_pdf_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

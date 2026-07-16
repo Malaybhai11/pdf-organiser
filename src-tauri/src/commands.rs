@@ -218,3 +218,27 @@ pub async fn upload_files_from_paths(
         .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }
+
+#[derive(Serialize)]
+pub struct PdfMetadata {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub creator: Option<String>,
+    pub producer: Option<String>,
+    pub page_count: usize,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+    pub file_size: u64,
+    pub file_name: String,
+}
+
+#[tauri::command]
+pub async fn get_pdf_metadata(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+) -> Result<CommandResponse<PdfMetadata>, String> {
+    manager.get_pdf_metadata(&customer_id, &file_name)
+        .map(CommandResponse::ok)
+        .map_err(|e| e.to_string())
+}
