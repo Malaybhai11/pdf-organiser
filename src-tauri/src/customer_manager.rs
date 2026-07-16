@@ -651,3 +651,26 @@ mod tests {
         
         Ok(())
     }
+
+    pub fn save_customer_file_with_dedup(&self, customer_id: &str, file_name: &str, data: &[u8]) -> Result<String> {
+        let original_dir = self.base_path.join(customer_id).join("original_files");
+        fs::create_dir_all(&original_dir)?;
+        let final_name = self.dedup_filename(&original_dir, file_name);
+        let file_path = original_dir.join(&final_name);
+        fs::write(file_path, data)?;
+        let mut meta = self.get_customer_metadata(customer_id)?;
+        meta.files.entry(final_name.clone()).or_insert_with(|| FileMetadata { tags: vec![] });
+        self.save_customer_metadata(customer_id, &meta)?;
+        Ok(final_name)
+    }
+    fn dedup_filename(&self, dir: &Path, file_name: &str) -> String {
+        let stem = std::path::Path::new(file_name).file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let ext = std::path::Path::new(file_name).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        if !dir.join(file_name).exists() { return file_name.to_string(); }
+        let mut counter = 1;
+        loop {
+            let candidate = format!("{} ({}){}", stem, counter, ext);
+            if !dir.join(&candidate).exists() { return candidate; }
+            counter += 1;
+        }
+    }
