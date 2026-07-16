@@ -712,3 +712,38 @@ mod tests {
         }
         Ok(split_name)
     }
+
+    pub fn undo_last_operation(&self, customer_id: &str) -> Result<Option<String>> {
+        let history_path = self.base_path.join(customer_id).join("operation_history.json");
+        if !history_path.exists() {
+            return Ok(None);
+        }
+        let history: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&history_path)?)?;
+        if let Some(last) = history.last() {
+            let op_type = last["type"].as_str().unwrap_or("");
+            match op_type {
+                "delete_file" => {
+                    if let (Some(backup_path), Some(file_name)) = (
+                        last.get("backup_path").and_then(|v| v.as_str()),
+                        last.get("file_name").and_then(|v| v.as_str()),
+                    ) {
+                        let restore_path = self.base_path.join(customer_id).join("original_files").join(file_name);
+                        let bp = std::path::Path::new(backup_path);
+                        if bp.exists() {
+                            std::fs::copy(bp, &restore_path)?;
+                            std::fs::remove_file(bp)?;
+                            let mut meta = self.get_customer_metadata(customer_id)?;
+                            meta.files.entry(file_name.to_string()).or_insert_with(|| FileMetadata { tags: vec![] });
+                            self.save_customer_metadata(customer_id, &meta)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Trim history
+            let remaining: Vec<_> = history.iter().take(history.len() - 1).cloned().collect();
+            std::fs::write(&history_path, serde_json::to_string(&remaining)?)?;
+            return Ok(Some(op_type.to_string()));
+        }
+        Ok(None)
+    }
