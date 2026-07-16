@@ -627,3 +627,27 @@ mod tests {
         let text = String::from_utf8_lossy(buf);
         text.matches("/Type /Page").count()
     }
+
+    pub fn rename_customer_file(&self, customer_id: &str, old_name: &str, new_name: &str) -> Result<()> {
+        let customer_dir = self.base_path.join(customer_id);
+        let old_path = customer_dir.join("original_files").join(old_name);
+        let new_path = customer_dir.join("original_files").join(new_name);
+        
+        if !old_path.exists() {
+            anyhow::bail!("Source file not found: {}", old_name);
+        }
+        if new_path.exists() {
+            anyhow::bail!("A file named '{}' already exists", new_name);
+        }
+        
+        fs::rename(&old_path, &new_path)?;
+        
+        // Update metadata
+        let mut meta = self.get_customer_metadata(customer_id)?;
+        if let Some(file_meta) = meta.files.remove(old_name) {
+            meta.files.insert(new_name.to_string(), file_meta);
+        }
+        self.save_customer_metadata(customer_id, &meta)?;
+        
+        Ok(())
+    }

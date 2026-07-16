@@ -242,3 +242,15 @@ pub async fn get_pdf_metadata(
         .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn rename_file(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    old_name: String,
+    new_name: String,
+) -> Result<CommandResponse<()>, String> {
+    manager.rename_customer_file(&customer_id, &old_name, &new_name)
+        .map(|_| CommandResponse::ok(()))
+        .map_err(|e| e.to_string())
+}
