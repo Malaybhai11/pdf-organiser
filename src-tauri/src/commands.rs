@@ -254,3 +254,16 @@ pub async fn rename_file(
         .map(|_| CommandResponse::ok(()))
         .map_err(|e| e.to_string())
 }
+
+
+#[tauri::command]
+pub async fn rotate_pdf_pages(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+    rotation: i32,
+) -> Result<CommandResponse<String>, String> {
+    manager.rotate_pdf_pages(&customer_id, &file_name, rotation)
+        .map(CommandResponse::ok)
+        .map_err(|e| e.to_string())
+}

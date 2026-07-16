@@ -39,6 +39,7 @@ pub fn run() {
             commands::delete_file,
             commands::upload_file_from_path,
             commands::upload_files_from_paths,
+            commands::rotate_pdf_pages,
             commands::rename_file,
             commands::get_pdf_metadata,
         ])

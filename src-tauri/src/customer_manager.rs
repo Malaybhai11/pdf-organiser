@@ -674,3 +674,24 @@ mod tests {
             counter += 1;
         }
     }
+
+    pub fn rotate_pdf_pages(&self, customer_id: &str, file_name: &str, rotation: i32) -> Result<String> {
+        let file_path = self.base_path.join(customer_id).join("original_files").join(file_name);
+        if !file_path.exists() {
+            anyhow::bail!("File not found: {}", file_name);
+        }
+        let rotated_name = format!("rotated_{}", file_name);
+        let rotated_path = self.base_path.join(customer_id).join("original_files").join(&rotated_name);
+        // Copy and rotate via pdfium
+        let pdfium = PDFIUM.lock().unwrap();
+        if let Ok(ref pdfium) = *pdfium {
+            if let Ok(doc) = pdfium.0.load_pdf_from_file(&file_path, None) {
+                let pages = doc.pages();
+                for page in pages.iter() {
+                    page.set_rotation(rotation)?;
+                }
+                doc.save_to_file(&rotated_path)?;
+            }
+        }
+        Ok(rotated_name)
+    }
