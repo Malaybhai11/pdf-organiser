@@ -695,3 +695,20 @@ mod tests {
         }
         Ok(rotated_name)
     }
+
+    pub fn split_pdf_range(&self, customer_id: &str, file_name: &str, start_page: usize, end_page: usize) -> Result<String> {
+        let file_path = self.base_path.join(customer_id).join("original_files").join(file_name);
+        if !file_path.exists() {
+            anyhow::bail!("File not found: {}", file_name);
+        }
+        let split_name = format!("pages_{}-{}_{}", start_page, end_page, file_name);
+        let split_path = self.base_path.join(customer_id).join("original_files").join(&split_name);
+        let pdfium = PDFIUM.lock().unwrap();
+        if let Ok(ref pdfium) = *pdfium {
+            if let Ok(doc) = pdfium.0.load_pdf_from_file(&file_path, None) {
+                let new_doc = doc.extract_pages(start_page.saturating_sub(1)..end_page)?;
+                new_doc.save_to_file(&split_path)?;
+            }
+        }
+        Ok(split_name)
+    }

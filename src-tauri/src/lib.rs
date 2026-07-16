@@ -40,6 +40,7 @@ pub fn run() {
             commands::upload_file_from_path,
             commands::upload_files_from_paths,
             commands::rotate_pdf_pages,
+            commands::split_pdf_by_range,
             commands::rename_file,
             commands::get_pdf_metadata,
         ])

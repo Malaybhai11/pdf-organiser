@@ -267,3 +267,17 @@ pub async fn rotate_pdf_pages(
         .map(CommandResponse::ok)
         .map_err(|e| e.to_string())
 }
+
+
+#[tauri::command]
+pub async fn split_pdf_by_range(
+    manager: State<'_, CustomerManager>,
+    customer_id: String,
+    file_name: String,
+    start_page: usize,
+    end_page: usize,
+) -> Result<CommandResponse<String>, String> {
+    manager.split_pdf_range(&customer_id, &file_name, start_page, end_page)
+        .map(CommandResponse::ok)
+        .map_err(|e| e.to_string())
+}
